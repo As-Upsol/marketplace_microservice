@@ -4,30 +4,39 @@ import spacy
 import yaml
 import re
 from fuzzywuzzy import fuzz
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, util
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.feature_extraction.text import TfidfVectorizer
+from langchain_groq import ChatGroq
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  
+CHATGROQ_API_KEY = os.getenv("GROQ_API_KEY")  
 
 class Matcher:
     def __init__(self, config_path):
+        self.groq_client = None
+        if CHATGROQ_API_KEY:
+            self.groq_client = ChatGroq(
+                api_key=CHATGROQ_API_KEY,
+                model_name="llama3-8b-8192"  
+            )
         self.config = self._load_config(config_path)
         self.nlp = self._load_spacy_model()
         self.seller_df = None
         self.buyer_df = None
         self.matches = []
-        self.decimal_places = 1
-        self.base_boost = 1.5 
-        self.match_boost = 1.2
+        self.decimal_places = self.config['io']['output'].get('decimal_places', 1)
         self.load_data()
         self.preprocess_data()
-
-        # Load SentenceTransformer model
+        
+        
+        # Load SentenceTransformer model for semantic similarity
         self.st_model = SentenceTransformer("thenlper/gte-base")
-
-  
-        self.max_raw_score = 0.0
-        for model_config in self.config['models'].values():
-            subcat_weight_sum = sum(subcat['weight'] for subcat in model_config['categories'])
-            self.max_raw_score += subcat_weight_sum * model_config['weight']
+        
+        # Initialize TF-IDF vectorizer for keyword matching
+        self.tfidf_vectorizer = TfidfVectorizer()
 
     def _load_config(self, config_path):
         with open(config_path, 'r') as f:
@@ -42,62 +51,63 @@ class Matcher:
     def _preprocess_text(self, text):
         if pd.isna(text):
             return ""
-        text = str(text).lower()
-        text = re.sub(r'[^\w\s]', '', text)
+        text = str(text)
+        if self.config['preprocessing']['text_cleaning']['lowercase']:
+            text = text.lower()
+        if self.config['preprocessing']['text_cleaning']['remove_punctuation']:
+            text = re.sub(r'[^\w\s]', '', text)
         return text.strip()
 
     def _combine_fields(self, row, fields):
-        return ' '.join(str(row[field]) for field in fields if field in row and pd.notna(row[field]))
+        combined = []
+        for field in fields:
+            if field in row and pd.notna(row[field]):
+                combined.append(str(row[field]))
+        return ' '.join(combined)
 
-    def _boosted_similarity(self, text1, text2):
-        """Use SentenceTransformer embeddings + cosine similarity + optional fuzzy boost"""
+    def _split_string_to_list(self, text, delimiter=','):
+        if pd.isna(text) or not text:
+            return []
+        return [item.strip() for item in str(text).split(delimiter) if item.strip()]
+
+    def keyword_similarity(self, text1, text2):
         if not text1 or not text2:
             return 0.0
-
-        # Preprocess texts
-        text1 = self._preprocess_text(text1)
-        text2 = self._preprocess_text(text2)
-
-        # Compute embeddings
-        embeddings = self.st_model.encode([text1, text2])
-        sim_score = cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]  # in [0,1]
-
-        # Apply base boost
-        boosted_score = sim_score * self.base_boost
-
-        # Optional: fuzzy matching boost (can be removed if you want purely transformer-based)
-        fuzzy_score = (fuzz.token_set_ratio(text1, text2) / 100.0) * self.base_boost
-
-        if boosted_score > 0.6:
-            boosted_score *= self.match_boost
-        if fuzzy_score > 0.6:
-            fuzzy_score *= self.match_boost
-
-        return max(boosted_score, fuzzy_score)
-
-    def _industry_similarity(self, value1, value2):
-        """Industry similarity using fuzzy matching with boosting (can be enhanced similarly)"""
-        if pd.isna(value1) or pd.isna(value2):
-            return 0.0
-        base_score = fuzz.token_set_ratio(str(value1).lower(), str(value2).lower()) / 100.0
-        boosted_score = base_score * self.base_boost * (self.match_boost if base_score > 0.6 else 1.0)
-        return boosted_score
-
-    def _range_comparison(self, value1, value2, range_threshold=0.4):
-        """Range comparison remains the same"""
         try:
-            val1 = float(value1) if not pd.isna(value1) else 0.0
-            val2 = float(value2) if not pd.isna(value2) else 0.0
+            tfidf = self.tfidf_vectorizer.fit_transform([text1, text2])
+            return cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
+        except Exception:
+            return 0.0
 
-            if val1 == 0.0 or val2 == 0.0:
-                return range_threshold
+    def semantic_similarity(self, text1, text2):
+        if not text1 or not text2:
+            return 0.0
+        embeddings = self.st_model.encode([text1, text2], convert_to_tensor=True)
+        return util.pytorch_cos_sim(embeddings[0], embeddings[1]).item()
 
-            ratio = min(val1, val2) / max(val1, val2)
-            boosted_ratio = ratio * self.base_boost * (self.match_boost if ratio > 0.6 else 1.0)
-            return max(boosted_ratio, range_threshold)
-        except:
-            return range_threshold
-        
+    def categorical_similarity(self, text1, text2):
+        items1 = self._split_string_to_list(text1)
+        items2 = self._split_string_to_list(text2)
+        if not items1 or not items2:
+            return 0.0
+        set1, set2 = set(items1), set(items2)
+        intersection = len(set1.intersection(set2))
+        union = len(set1.union(set2))
+        return intersection / union if union != 0 else 0.0
+
+    def hierarchical_similarity(self, text1, text2):
+        if not text1 or not text2:
+            return 0.0
+        levels1 = [level.strip() for level in str(text1).split('>')]
+        levels2 = [level.strip() for level in str(text2).split('>')]
+        common = 0
+        for l1, l2 in zip(levels1, levels2):
+            if l1 == l2:
+                common += 1
+            else:
+                break
+        return common / max(len(levels1), len(levels2)) if max(len(levels1), len(levels2)) > 0 else 0.0
+
     def load_data(self):
         csv_options = self.config['io']['input']['csv_options']
         """
@@ -125,12 +135,11 @@ class Matcher:
             for df in [self.buyer_df]:
                 for column in df.columns:
                     if df[column].dtype == 'object':
-                        df[column] = df[column].apply(self._preprocess_text)
-            
+                        df[column] = df[column].apply(self._preprocess_text) 
 
-    def _calculate_category_score(self, seller_row, buyer_row, category_config, match_result, category_prefix):
-        total_score = 0.0
-        sub_scores = {}
+    def _calculate_category_score(self, seller_row, buyer_row, category_config, match_result, model_name):
+        category_score = 0.0
+        category_display_name = category_config['display_name']
 
         for subcategory in category_config['categories']:
             strategy = subcategory['strategy']
@@ -139,36 +148,28 @@ class Matcher:
 
             seller_text = self._combine_fields(seller_row, seller_fields)
             buyer_text = self._combine_fields(buyer_row, buyer_fields)
+            subcategory_name = subcategory['name']
 
             if strategy == 'keyword_match':
-                score = self._boosted_similarity(seller_text, buyer_text)
-
-            elif strategy == 'industry_similarity':
-                score = self._industry_similarity(seller_text, buyer_text)
-
-            elif strategy == 'revenue_comparison':
-                score = self._range_comparison(
-                    seller_row.get('Revenue'),
-                    buyer_row.get('Revenue')
-                )
-
-            elif strategy == 'employee_comparison':
-                score = self._range_comparison(
-                    seller_row.get('Number of employees'),
-                    buyer_row.get('Employees')
-                )
-
+                score = self.keyword_similarity(seller_text, buyer_text)
+            elif strategy == 'spacy_similarity':
+                score = self.semantic_similarity(seller_text, buyer_text)
+            elif strategy in ['exact_match', 'categorical']:
+                if seller_text and buyer_text:
+                    score = fuzz.token_set_ratio(seller_text, buyer_text) / 100.0
+                else:
+                    score = 0.0
+            elif strategy in ['industry_similarity', 'hierarchical']:
+                score = self.hierarchical_similarity(seller_text, buyer_text)
             else:
-                continue
+                score = 0.0
 
-            # Do NOT cap here; allow >1.0 for normalization later
-            sub_score_name = f"{category_prefix}_{subcategory['name']}_score"
-            sub_scores[sub_score_name] = score
+            subcategory_key = f"{category_display_name}: {subcategory_name}"
+            match_result[subcategory_key] = round(score * 100, self.decimal_places)
+            category_score += score * subcategory['weight']
 
-            total_score += score * subcategory['weight']
-
-        match_result.update(sub_scores)
-        return total_score
+        match_result[category_display_name] = round(category_score * 100, self.decimal_places)
+        return category_score * category_config['weight']
 
     def calculate_matches(self):
         valid_sellers = self.seller_df[self.seller_df['company_name'].notna() &
@@ -188,102 +189,205 @@ class Matcher:
                     'Seller Name': seller_name,
                     'Buyer Name': buyer_name
                 }
-                raw_total_score = 0.0
-                raw_sub_scores = {}
+                total_score = 0.0
 
                 for model_name, model_config in self.config['models'].items():
-                    raw_score = self._calculate_category_score(
+                    weighted_score = self._calculate_category_score(
                         seller,
                         buyer,
                         model_config,
                         match_result,
                         model_name
                     )
-                    weighted_raw_score = raw_score * model_config['weight']
-                    raw_sub_scores[model_name] = weighted_raw_score
-                    raw_total_score += weighted_raw_score
+                    total_score += weighted_score
 
-                # Normalize scores to percentage relative to theoretical max raw score
-                overall_percentage = (raw_total_score / self.max_raw_score) * 100
-                overall_percentage = round(min(overall_percentage, 100), self.decimal_places)
-                match_result['Overall Match Score'] = overall_percentage
-
-                # Normalize and store subcategory scores as percentages
-                for model_name, weighted_raw_score in raw_sub_scores.items():
-                    normalized_sub_score = (weighted_raw_score / self.max_raw_score) * 100
-                    normalized_sub_score = round(min(normalized_sub_score, 100), self.decimal_places)
-                    display_name = self.config['models'][model_name]['display_name']
-                    match_result[display_name] = normalized_sub_score
-
+                # Calculate overall match score 
+                overall_score = (total_score / sum(m['weight'] for m in self.config['models'].values())) * 100
+                match_result['Overall Match Score'] = round(overall_score, self.decimal_places)
+                
                 self.matches.append(match_result)
 
-
     def save_results(self):
+        if not self.matches:
+            print("No matches found to save.")
+            return
+            
         result_df = pd.DataFrame(self.matches)
         
-        
+        # Filter out empty seller names
         result_df = result_df[result_df['Seller Name'].notna() & 
                             (result_df['Seller Name'] != '')]
         
-        sub_score_cols = [col for col in result_df.columns if '_score' in col]
-        column_order = self.config['io']['output']['column_order'] + sub_score_cols
-        result_df = result_df[column_order]
+        # Reorder columns as specified in config
+        column_order = self.config['io']['output']['column_order']
+        available_columns = [col for col in column_order if col in result_df.columns]
+        result_df = result_df[available_columns]
         
         for col in result_df.columns:
             if result_df[col].dtype == 'float64':
                 result_df[col] = result_df[col].round(self.decimal_places)
         
+        if 'Overall Match Score' in result_df.columns:
+            result_df = result_df.sort_values(
+                by='Overall Match Score',
+                ascending=False,
+                inplace=False
+            )
+        else:
+            print("Warning: 'Overall Match Score' column not found - skipping sorting")
         return result_df
 
+    def generate_category_rationale(self, entity_row, other_row, model_key, display_name, score):
+        """Wrapper method that calls either LLM or simple rationale generator"""
+        return self._generate_llm_rationale(entity_row, other_row, display_name, score)
+
+    def _generate_llm_rationale(self, seller_row, buyer_row, model_key, score):
+        """Generate rationale for a match score using LLM or fallback to simple method."""
+        # First find the model config that matches this display name
+        model_config = None
+        for m_name, m_config in self.config['models'].items():
+            if m_config['display_name'] == model_key:
+                model_config = m_config
+                break
+        
+        if not model_config:
+            return self._generate_rationale_for_category_simple(model_key, score)
+        
+        # Get all relevant fields for this model
+        seller_fields = set()
+        buyer_fields = set()
+        for subcat in model_config['categories']:
+            seller_fields.update(subcat['fields']['seller'])
+            buyer_fields.update(subcat['fields']['buyer'])
+        
+        # Prepare the data for the prompt
+        seller_data = {}
+        for field in seller_fields:
+            if field in seller_row and pd.notna(seller_row[field]) and seller_row[field] != "":
+                seller_data[field] = seller_row[field]
+        
+        buyer_data = {}
+        for field in buyer_fields:
+            if field in buyer_row and pd.notna(buyer_row[field]) and buyer_row[field] != "":
+                buyer_data[field] = buyer_row[field]
+        
+        seller_name = seller_row.get('company_name', 'N/A')
+        buyer_name = buyer_row.get('Company Name', 'N/A')
+        
+        prompt = f"""As an M&A analyst, explain why these companies have a {model_key} compatibility score of {score:.1f}%.
+
+**Seller Company**: {seller_name}
+**Relevant Attributes**: {seller_data}
+
+**Buyer Company**: {buyer_name}  
+**Relevant Attributes**: {buyer_data}
+
+Provide a concise 1-2 sentence business rationale focusing on the most significant matching attributes. If no meaningful match exists, simply state that."""
+        
+        if hasattr(self, 'groq_client') and self.groq_client:
+            try:
+                response = self.groq_client.invoke(prompt)
+                return response.content.strip()
+            except Exception as e:
+                print(f"Error generating LLM rationale: {e}")
+                return self._generate_rationale_for_category_simple(model_key, score)
+        
+        # Fallback to simple rationale
+        return self._generate_rationale_for_category_simple(model_key, score)
+
+    def _generate_rationale_for_category_simple(self, category_name, score):
+        """Fallback when LLM isn't available"""
+        if score > 80:
+            return f"Exceptional alignment in {category_name.lower()} based on key business attributes."
+        elif score > 60:
+            return f"Strong compatibility in {category_name.lower()} with multiple matching characteristics."
+        elif score > 40:
+            return f"Moderate alignment in {category_name.lower()} with some shared attributes."
+        elif score > 20:
+            return f"Limited compatibility in {category_name.lower()} with few matching aspects."
+        else:
+            return f"Minimal alignment in {category_name.lower()} with no significant matches."
+
+    def explain_best_match(self, company_name):
+        """
+        Finds the best match for a given company name (seller or buyer) and generates category rationales.
+        Returns a formatted string.
+        """
+        name = company_name.strip().lower()
+        output_lines = []
+
+        # Try to find as a seller
+        seller_matches = [m for m in self.matches if m['Seller Name'].strip().lower() == name]
+        if seller_matches:
+            matches = seller_matches
+            entity_df = self.seller_df
+            entity_col = 'company_name'
+            other_df = self.buyer_df
+            other_col = 'Company Name'
+            entity_col_match = 'Seller Name'
+            other_col_match = 'Buyer Name'
+        else:
+            #find as a buyer
+            buyer_matches = [m for m in self.matches if m['Buyer Name'].strip().lower() == name]
+            if buyer_matches:
+                matches = buyer_matches
+                entity_df = self.buyer_df
+                entity_col = 'Company Name'
+                other_df = self.seller_df
+                other_col = 'company_name'
+                entity_col_match = 'Buyer Name'
+                other_col_match = 'Seller Name'
+            else:
+                return "No matches found for this company name."
+
+        best = max(matches, key=lambda x: x['Overall Match Score'])
+
+        entity_row = entity_df[entity_df[entity_col].str.strip().str.lower() == best[entity_col_match].strip().lower()]
+        other_row = other_df[other_df[other_col].str.strip().str.lower() == best[other_col_match].strip().lower()]
+        if entity_row.empty or other_row.empty:
+            return "The buyer or seller provided is not in the database."
+        entity_row = entity_row.iloc[0]
+        other_row = other_row.iloc[0]
+
+        output_lines.append([f"Best Match for {company_name}: {best[other_col_match]}",
+                       f"Overall Match Score: {int(round(best['Overall Match Score']))}%"])
+
+        # Generate rationales for each category
+        for model_key, model_config in self.config['models'].items():
+            display_name = model_config['display_name']
+            score = best.get(display_name, None)
+            if score is not None:
+                rationale = self.generate_category_rationale(
+                    entity_row,
+                    other_row,
+                    display_name,
+                    display_name,
+                    score
+                )
+                output_lines.append([f"{display_name} ({int(round(score))}%):\n{rationale}"])
+
+        return output_lines
+
     def run(self, standalone_seller: dict= None):
+        print("Starting matching process...")
         if standalone_seller:
             seller_df = pd.DataFrame([standalone_seller])
+        
         self.preprocess_data(df=seller_df)
         self.calculate_matches()
         results = self.save_results()
         return results.to_dict(orient='records')
-
-
-
-
-"""
         
-matcher = Matcher('config.yaml')
-print("Running Match.....................................................................................................")
-standalone_seller = {
-    # Basic Info
-    "company_name": "Atomus Limited",
-    "company_website": "https://atomus.com/",
-    "Headquarters - Country/Region": "United Kingdom",
-    
-    # Business Information
-    "company_description": "Atomus are software developers and creators of a market-leading Sales Coaching & Development platform, aCoach. Working within the Global Life Science sector for over 15 years, they have 5 of the big 10 global Pharmaceutical companies as clients.",
-    "products_and_services": "aCoach delivers Accelerated Skill Development through enhanced coaching. Organizations with large sales forces invest significant sums in their training programs often without a framework to ensure that the lessons are being taught and learnt in the field.",
-    "revenue_model": "B2B SaaS",
-    "unique_selling_points": "learning management platform for life sciences",
-    "industry_keywords": "learning management system; life sciences technology; sales coaching platform; sales training platform",
-    "value_chain": "Software",
-    "target_customers": "Enterprise Organizations within the life sciences sector",
-    "customer_industries": "Life sciences",
-    "main_competitors": "https://www.quantified.ai/; https://www.allego.com/",
-    "growth_plan": "Atomus aims to expand its reach within the life sciences sector by continually enhancing its coaching platform",
-    
-    # Metrics
-    "revenue_by_geography": "USA 70%; UK 30%",
-    "revenue_by_product_type": "Recurring Revenue from SaaS offering 77%; Non Recurring Revenue from onboarding 23%",
-    "Number of employees": "20",
-    "Revenue": "3000000",  # $3M
-    "EBITDA": "1000000",   # $1M
-    
-    # Optional fields (included to prevent missing field errors)
-    "share_sale_type": "",
-    "transition_period": "",
-    "reason_for_selling": "",
-    "accreditations": "",
-    "recent_awards": "",
-    "outstanding_litigation": "No",
-    "negative_media_coverage": "No"
-}
-matcher.run(standalone_seller)
-
 """
+# Example usage
+if __name__ == "__main__":
+    matcher = Matcher('config.yaml')
+    standalone_seller = {"company_name": 'Buleknight', 
+'industry_keywords': '', 'company_description': 'Artificial Intelligence Company', 'regulatory_bodies': 'NEPA, PHCN', 'accreditations': '', 'industry_associations': '', 'recent_awards': '', 'main_competitors': 'Polaris;Google', 'growth_plan': '', 'value_chain': '', 'products_and_services': 'Geospatial Intelligence, Artificial Intelligence, Machine learning', 'unique_selling_points': '', 'revenue_model': '', 'business_model_type': '', 'revenue_by_product_type': 'Drone 50, Analytics 50', 'customer_industries': 'commercial-products;commercial-services;apparel-accessories;consumer-durables;consumer-non-durables;energy-equipment;exploration-production-refining;energy-services;healthcare-devices-supplies;healthcare-services;construction-non-wood;chemicals-gases', 'target_customers': 'Geospatial Developers and planners', 'revenue_by_customer_type': 'Blacks 50, Whites 50', 'Headquarters': 'United Kingdom', 'revenue_by_geography': 'Nigeria 50, United Kingdom 50', 'Revenue': '23455', 'total_employees': '15'}
+    matcher.run(standalone_seller)
+    
+    print("\nRationale:")
+    print(matcher.explain_best_match(standalone_seller['company_name']))
+    
+    
+    """

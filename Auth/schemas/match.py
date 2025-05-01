@@ -52,8 +52,33 @@ class MatchResult(BaseModel):
     Buyer_Name: str
     Overall_Match_Score: float
     Sector_Match: Optional[float] = None
+    Sector_Match_Keyword: Optional[float] = None
+    Sector_Match_Categorical: Optional[float] = None
+    Sector_Match_Hierarchical: Optional[float] = None
+    Sector_Match_Semantic: Optional[float] = None
     Offering_Match: Optional[float] = None
+    Offering_Match_Keyword: Optional[float] = None
+    Offering_Match_Categorical: Optional[float] = None
+    Offering_Match_Hierarchical: Optional[float] = None
+    Offering_Match_Semantic: Optional[float] = None
     Customer_Match: Optional[float] = None
+    Customer_Match_Keyword: Optional[float] = None
+    Customer_Match_Categorical: Optional[float] = None
+    Customer_Match_Hierarchical: Optional[float] = None
+    Customer_Match_Semantic: Optional[float] = None
     Geography_Match: Optional[float] = None
+    Geography_Match_Keyword: Optional[float] = None
+    Geography_Match_Categorical: Optional[float] = None
+    Geography_Match_Hierarchical: Optional[float] = None
+    Geography_Match_Semantic: Optional[float] = None
     Size_Match: Optional[float] = None
+    Size_Match_Keyword: Optional[float] = None
+    Size_Match_Categorical: Optional[float] = None
+    Size_Match_Hierarchical: Optional[float] = None
+    Size_Match_Semantic: Optional[float] = None
     Market_Position_Match: Optional[float] = None
+    Market_Position_Match_Keyword: Optional[float] = None
+    Market_Position_Match_Categorical: Optional[float] = None
+    Market_Position_Match_Hierarchical: Optional[float] = None
+    Market_Position_Match_Semantic: Optional[float] = None
+    
