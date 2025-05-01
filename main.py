@@ -1,5 +1,7 @@
 import os
 
+print("🚀 Starting FastAPI app on port:", os.environ.get("PORT", "not set"))
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +14,7 @@ load_dotenv()
 database.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
+print("Starting FastAPI app...")
 
 # Allow requests from 
 
@@ -22,7 +25,7 @@ app.add_middleware(
     allow_methods=["POST", "PATCH", "DELETE", "GET", "PUT", "OPTIONS"],
     allow_headers=["*"], # This allows all headers
     )
-
+print("I am here........................................................")
 @app.on_event("startup")
 async def startup_event():
     app.state.matcher = Matcher('config.yaml')
