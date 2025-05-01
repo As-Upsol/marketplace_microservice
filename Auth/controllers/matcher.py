@@ -15,7 +15,7 @@ load_dotenv()
 CHATGROQ_API_KEY = os.getenv("GROQ_API_KEY")  
 
 class Matcher:
-    def __init__(self, config_path):
+    def __init__(self, config_path =("config.yaml")):
         self.groq_client = None
         if CHATGROQ_API_KEY:
             self.groq_client = ChatGroq(
@@ -235,6 +235,7 @@ class Matcher:
             )
         else:
             print("Warning: 'Overall Match Score' column not found - skipping sorting")
+        print(len(result_df))
         return result_df
 
     def generate_category_rationale(self, entity_row, other_row, model_key, display_name, score):
@@ -376,6 +377,7 @@ Provide a concise 1-2 sentence business rationale focusing on the most significa
         self.preprocess_data(df=seller_df)
         self.calculate_matches()
         results = self.save_results()
+        print(len(results.to_dict(orient='records')))
         return results.to_dict(orient='records')
         
 """

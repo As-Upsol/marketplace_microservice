@@ -26,10 +26,10 @@ async def match_selelr_to_buyers(seller_data: SellerData, request: Request):
         print(seller_dict)
         
         # Access the matcher from app state
-        matcher = request.app.state.matcher
+        matcher = Matcher()
         # Run the matcher
         results = matcher.run(seller_dict)
-        print(results)
+        print(len(results))
         result["matches"] = results
         # Process dictionary directly
         rationale = matcher.explain_best_match(seller_dict["company_name"])
