@@ -20,6 +20,9 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # Copy the rest of the app
 COPY . .
 
+# Expose port 8080 for Cloud Run
+EXPOSE 8080
+
 
 # Run FastAPI on port 10000 (Render's default)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
