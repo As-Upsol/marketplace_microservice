@@ -1,0 +1,268 @@
+io:
+  input:
+    seller_file: "data/sellers.csv"
+    buyer_file: "data/mainbuyer.csv"
+    encoding: "utf-8"
+    csv_options:
+      delimiter: ","
+      quotechar: '"'
+      na_values: ["", "NA", "NaN", "N/A", "null", "None"]
+
+  output:
+    matches_file: "matches_output.csv"
+    format: "csv"
+    include_model_scores: true
+    score_format: "percentage"
+    decimal_places: 1
+    column_order:
+      - "Seller Name"
+      - "Buyer Name"
+      - "Overall Match Score"
+      - "Sector Match"
+      - "Offering Match"
+      - "Customer Match"
+      - "Geography Match"
+      - "Size Match"
+      - "Market Position Match"
+
+models:
+  sector_match:
+    display_name: "Sector Match"
+    weight: 0.25
+    categories:
+      - name: "keywords"
+        type: "tfidf"
+        strategy: "keyword_match"
+        weight: 0.8
+        fields:
+          seller: ["industry_keywords", "company_description"]
+          buyer: ["Keywords", "Industry Tags", "Short Description"]
+      - name: "description"
+        type: "jaccard"
+        strategy: "jaccard_similarity"
+        weight: 0.3
+        fields:
+          seller: ["company_description", "growth_plan"]
+          buyer: ["Short Description", "Long Description", "Description"]
+      - name: "categorical"
+        type: "exact_match"
+        strategy: "exact_match"
+        weight: 0.15
+        fields:
+          seller: []
+          buyer: ["Primary Industry Code", "Primary Industry Sector"]
+      - name: "hierarchical"
+        type: "industry_similarity"
+        strategy: "industry_similarity"
+        weight: 0.5
+        fields:
+          seller: ["value_chain"]
+          buyer: ["Value Chain"]
+
+  offering_match:
+    display_name: "Offering Match"
+    weight: 0.20
+    categories:
+      - name: "keywords"
+        type: "tfidf"
+        strategy: "keyword_match"
+        weight: 0.4
+        fields:
+          seller: ["products_and_services", "unique_selling_points"]
+          buyer: ["Offering", "Problem Solved / Market Painpoint"]
+      - name: "description"
+        type: "jaccard"
+        strategy: "jaccard_similarity"
+        weight: 0.3
+        fields:
+          seller: ["products_and_services"]
+          buyer: ["Offering", "Core Value Proposition"]
+      - name: "categorical"
+        type: "exact_match"
+        strategy: "exact_match"
+        weight: 0.15
+        fields:
+          seller: ["revenue_model"]
+          buyer: ["Business model"]
+      - name: "hierarchical"
+        type: "industry_similarity"
+        strategy: "industry_similarity"
+        weight: 0.15
+        fields:
+          seller: ["revenue_by_product_type"]
+          buyer: ["Product/Service Features"]
+
+  customer_match:
+    display_name: "Customer Match"
+    weight: 0.15
+    categories:
+      - name: "keywords"
+        type: "tfidf"
+        strategy: "keyword_match"
+        weight: 0.3
+        fields:
+          seller: ["customer_industries", "company_description"]
+          buyer: ["Target Customers Description", "Target Customers Industries"]
+      - name: "description"
+        type: "jaccard"
+        strategy: "jaccard_similarity"
+        weight: 0.3
+        fields:
+          seller: ["company_description"]
+          buyer: ["Target Customers Description"]
+      - name: "categorical"
+        type: "exact_match"
+        strategy: "exact_match"
+        weight: 0.2
+        fields:
+          seller: ["target_customers"]
+          buyer: ["Target Customers Type"]
+      - name: "hierarchical"
+        type: "industry_similarity"
+        strategy: "industry_similarity"
+        weight: 0.2
+        fields:
+          seller: ["customer_industries"]
+          buyer: ["Target Customers Industries"]
+
+  geography_match:
+    display_name: "Geography Match"
+    weight: 0.10
+    categories:
+      - name: "keywords"
+        type: "tfidf"
+        strategy: "keyword_match"
+        weight: 0.2
+        fields:
+          seller: ["Headquarters - Country/Region"]
+          buyer: ["HQ Country", "HQ City"]
+      - name: "description"
+        type: "jaccard"
+        strategy: "jaccard_similarity"
+        weight: 0.1
+        fields:
+          seller: []
+          buyer: []
+      - name: "categorical"
+        type: "exact_match"
+        strategy: "exact_match"
+        weight: 0.4
+        fields:
+          seller: ["Headquarters - Country/Region"]
+          buyer: ["HQ Country"]
+      - name: "hierarchical"
+        type: "industry_similarity"
+        strategy: "industry_similarity"
+        weight: 0.3
+        fields:
+          seller: ["revenue_by_geography"]
+          buyer: ["HQ City"]
+
+  market_position_match:
+    display_name: "Market Position Match"
+    weight: 0.10
+    categories:
+      - name: "keywords"
+        type: "tfidf"
+        strategy: "keyword_match"
+        weight: 0.3
+        fields:
+          seller: ["industry_keywords", "main_competitors"]
+          buyer: ["Industry Tags", "Core Value Proposition"]
+      - name: "description"
+        type: "jaccard"
+        strategy: "jaccard_similarity"
+        weight: 0.3
+        fields:
+          seller: ["main_competitors"]
+          buyer: ["Core Value Proposition"]
+      - name: "categorical"
+        type: "exact_match"
+        strategy: "exact_match"
+        weight: 0.2
+        fields:
+          seller: []
+          buyer: []
+      - name: "hierarchical"
+        type: "industry_similarity"
+        strategy: "industry_similarity"
+        weight: 0.2
+        fields:
+          seller: []
+          buyer: []
+
+  size_match:
+    display_name: "Size Match"
+    weight: 0.20
+    categories:
+      - name: "revenue"
+        type: "range_match"
+        strategy: "revenue_comparison"
+        weight: 0.4
+        fields:
+          seller: ["Revenue"]
+          buyer: ["Revenue"]
+      - name: "employee_count"
+        type: "range_match"
+        strategy: "employee_comparison"
+        weight: 0.3
+        fields:
+          seller: ["Number of employees"]
+          buyer: ["Employees"]
+      - name: "categorical"
+        type: "exact_match"
+        strategy: "exact_match"
+        weight: 0.1
+        fields:
+          seller: []
+          buyer: []
+      - name: "growth_stage"
+        type: "semantic"
+        strategy: "growth_stage_match"
+        weight: 0.2
+        fields:
+          seller: []
+          buyer: []
+
+scaling:
+  factor: 1.0
+  range: [0, 100]
+
+category_strategies:
+  keyword_match:
+    min_keyword_count: 2
+    similarity_threshold: 0.6
+
+  jaccard_similarity:
+    min_keyword_count: 1
+    similarity_threshold: 0.4
+
+  exact_match:
+    match_threshold: 1.0
+
+  industry_similarity:
+    taxonomy_file: "data/industry_taxonomy.csv"
+    max_depth: 3
+
+field_aliases:
+  seller:
+    industry_keywords: ["sector_tags", "business_keywords"]
+    naics_code: ["industry_classification"]
+
+  buyer:
+    industry_tags: ["sector_labels", "business_segments"]
+
+preprocessing:
+  text_cleaning:
+    remove_punctuation: false
+    lowercase: true
+    remove_stopwords: false
+    custom_regex:
+      - pattern: "\\b(ltd|inc|llc|corp)\\b"
+        replace_with: ""
+    empty_field_handling:
+      default_text: ""
+
+  spacy:
+    model: "en_core_web_sm"
+    disabled_components: ["parser", "ner"]
